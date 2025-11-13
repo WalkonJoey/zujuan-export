@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         组卷网试卷提取
 // @namespace    http://tampermonkey.net/
-// @version      0.1
+// @version      0.2
 // @description  从组卷网提取试卷内容并导出为Word，支持图片处理
 // @icon         https://toolb.cn/favicon/zujuan.xkw.com
 // @author       pansoul
@@ -13,11 +13,11 @@
 // @grant        GM_xmlhttpRequest
 // @connect      staticzujuan.xkw.com
 // @connect      cdn*.xkw.com
+// @connect      img.xkw.com
 // ==/UserScript==
 
 (function() {
     'use strict';
-
 
     GM_addStyle(`
         .xkw-exporter {
@@ -110,19 +110,16 @@
         }
     `);
 
-
     window.addEventListener('load', function() {
         setTimeout(initExporter, 1000);
     });
 
     function initExporter() {
-
         const exporterBtn = document.createElement('div');
         exporterBtn.className = 'xkw-exporter';
         exporterBtn.textContent = '导出试卷';
         exporterBtn.addEventListener('click', toggleExporterPanel);
         document.body.appendChild(exporterBtn);
-
 
         const exporterPanel = document.createElement('div');
         exporterPanel.className = 'xkw-exporter-panel';
@@ -132,25 +129,29 @@
             <div class="options">
                 <label><input type="checkbox" id="download-images" checked> 下载图片(Word格式)</label>
                 <label><input type="checkbox" id="format-equations" checked> 格式化公式</label>
+                <label><input type="checkbox" id="include-answers" checked> 包含答案</label>
+                <label><input type="checkbox" id="include-explanations" checked> 包含解析</label>
             </div>
             <button id="export-word">导出为Word</button>
+            <button id="export-txt" style="background:#f44336;">导出为TXT</button>
         `;
         document.body.appendChild(exporterPanel);
-
 
         const progressDiv = document.createElement('div');
         progressDiv.className = 'xkw-exporter-progress';
         progressDiv.innerHTML = '处理中...';
         document.body.appendChild(progressDiv);
 
-
         exporterPanel.querySelector('.close').addEventListener('click', function() {
             exporterPanel.style.display = 'none';
         });
 
-
         document.getElementById('export-word').addEventListener('click', function() {
             exportPaper('word');
+        });
+
+        document.getElementById('export-txt').addEventListener('click', function() {
+            exportPaper('txt');
         });
     }
 
@@ -170,32 +171,28 @@
         progress.style.display = 'none';
     }
 
-
     function extractPaperContent() {
         showProgress('正在提取试卷内容...');
 
-
         const downloadImages = document.getElementById('download-images').checked;
         const formatEquations = document.getElementById('format-equations').checked;
-
+        const includeAnswers = document.getElementById('include-answers').checked;
+        const includeExplanations = document.getElementById('include-explanations').checked;
 
         const paperTitle = document.querySelector('.paper-title .main-title')?.textContent.trim() || '未命名试卷';
-
 
         const paperContent = {
             title: paperTitle,
             sections: [],
             options: {
-                includeAnswers: true,
-                includeExplanations: true,
+                includeAnswers,
+                includeExplanations,
                 downloadImages,
                 formatEquations
             }
         };
 
-
         let questionGlobalIndex = 1;
-
 
         const questionTypes = document.querySelectorAll('.ques-type');
 
@@ -209,20 +206,16 @@
             const questions = typeSection.querySelectorAll('.ques-item');
 
             questions.forEach((question, qIndex) => {
-
                 let qContent = question.querySelector('.exam-item__cnt')?.innerHTML.trim() || '';
-
 
                 if (!qContent) {
                     return;
                 }
 
-
                 const qNumber = `${questionGlobalIndex}.`;
                 questionGlobalIndex++;
 
-
-
+                // 移除题目编号
                 {
                     const temp = document.createElement('div');
                     temp.innerHTML = qContent;
@@ -231,10 +224,10 @@
                     qContent = temp.innerHTML;
                 }
 
-
+                // 移除重复的题目编号
                 qContent = qContent.replace(/^\s*(?:<[^>]+>\s*)*\d+\s*[.．、]?\s*/, '');
 
-
+                // 提取选项
                 const options = [];
                 const optionsTable = question.querySelector('table[name="optionsTable"]');
                 if (optionsTable) {
@@ -246,7 +239,7 @@
                         });
                     });
 
-
+                    // 从题目内容中移除选项表格
                     const tempDiv = document.createElement('div');
                     tempDiv.innerHTML = qContent;
                     const contentOptionsTable = tempDiv.querySelector('table[name="optionsTable"]');
@@ -256,6 +249,41 @@
                     qContent = tempDiv.innerHTML;
                 }
 
+                // 提取答案
+                let answer = '';
+                if (includeAnswers) {
+                    const answerEl = question.querySelector('.answer-content, .j_answer, .answer') ||
+                                   question.querySelector('[class*="answer"], [class*="答案"]');
+                    if (answerEl) {
+                        answer = answerEl.innerHTML.trim();
+                        // 清理答案内容
+                        const temp = document.createElement('div');
+                        temp.innerHTML = answer;
+                        temp.querySelectorAll('script, style, [class*="hidden"], [style*="display:none"]').forEach(el => {
+                            el.remove();
+                        });
+                        answer = temp.innerHTML.trim();
+                    }
+                }
+
+                // 提取解析
+                let explanation = '';
+                if (includeExplanations) {
+                    const explanationEl = question.querySelector('.analysis-content, .j_analysis, .analysis') ||
+                                       question.querySelector('[class*="analysis"], [class*="解析"], [class*="提示"]');
+                    if (explanationEl) {
+                        explanation = explanationEl.innerHTML.trim();
+                        // 清理解析内容
+                        const temp = document.createElement('div');
+                        temp.innerHTML = explanation;
+                        temp.querySelectorAll('script, style, [class*="hidden"], [style*="display:none"]').forEach(el => {
+                            el.remove();
+                        });
+                        explanation = temp.innerHTML.trim();
+                    }
+                }
+
+                // 提取图片
                 const images = [];
                 if (downloadImages) {
                     const imgElements = question.querySelectorAll('img');
@@ -271,7 +299,7 @@
                     });
                 }
 
-
+                // 添加题目到当前章节
                 currentSection.questions.push({
                     number: qNumber,
                     content: qContent,
@@ -300,7 +328,6 @@
         hideProgress();
         return paperContent;
     }
-
 
     function paperToHTML(paperContent) {
         let html = `
@@ -389,7 +416,6 @@
             <div class="paper-title">${paperContent.title}</div>
         `;
 
-
         const nonEmptySections = paperContent.sections.filter(section => section.questions && section.questions.length > 0);
 
         nonEmptySections.forEach((section, sectionIndex) => {
@@ -447,7 +473,6 @@
 
         html += `
         <script>
-
         function fixMathFormulas() {
             // 替换常见的数学符号
             const mathSymbols = {
@@ -508,15 +533,15 @@
             elements.forEach(el => {
                 let html = el.innerHTML;
                 for (const [symbol, replacement] of Object.entries(mathSymbols)) {
-                    const regex = new RegExp(symbol.replace(/\\/g, '\\\\'), 'g');
+                    const regex = new RegExp(symbol.replace(/\\/g, '\\\\\\\\'), 'g');
                     html = html.replace(regex, replacement);
                 }
                 el.innerHTML = html;
             });
 
             // 处理上下标
-            const superscriptRegex = /<sup>(.*?)<\/sup>/g;
-            const subscriptRegex = /<sub>(.*?)<\/sub>/g;
+            const superscriptRegex = /<sup>(.*?)<\\/sup>/g;
+            const subscriptRegex = /<sub>(.*?)<\\/sub>/g;
             elements.forEach(el => {
                 let html = el.innerHTML;
                 html = html.replace(superscriptRegex, '^($1)');
@@ -543,15 +568,15 @@
             // 移除题型编号中的重复
             const sectionTitles = document.querySelectorAll('.section-title');
             sectionTitles.forEach(title => {
-                title.textContent = title.textContent.replace(/^(\d+)[、\.]\s*\d+[、\.]/, '$1、');
+                title.textContent = title.textContent.replace(/^(\\d+)[、\\.]\\s*\\d+[、\\.]/, '$1、');
             });
 
             // 移除题目编号中的重复
             const questionContents = document.querySelectorAll('.question-content');
             questionContents.forEach(content => {
                 const firstPart = content.innerHTML.split(' ')[0];
-                if (firstPart && firstPart.match(/^\d+\./)) {
-                    content.innerHTML = content.innerHTML.replace(/^(\d+)\.\s*\d+\./, '$1.');
+                if (firstPart && firstPart.match(/^\\d+\\./)) {
+                    content.innerHTML = content.innerHTML.replace(/^(\\d+)\\.\\s*\\d+\\./, '$1.');
                 }
             });
         }
@@ -566,25 +591,19 @@
         return html;
     }
 
-
     function paperToText(paperContent) {
         let text = `${paperContent.title}\n\n`;
-
 
         const nonEmptySections = paperContent.sections.filter(section => section.questions && section.questions.length > 0);
 
         nonEmptySections.forEach(section => {
-
             let sectionTitle = section.index + ' ' + section.type;
-            sectionTitle = sectionTitle.replace(/^(\d+)[、\.]\s*\d+[、\.]/, '$1、');
-
+            sectionTitle = sectionTitle.replace(/^(\\d+)[、\\.]\\s*\\d+[、\\.]/, '$1、');
             text += `${sectionTitle}\n\n`;
 
             section.questions.forEach(question => {
-
                 let questionNumber = question.number;
-                questionNumber = questionNumber.replace(/^(\d+)[.．、]\s*\d+[.．、]/, '$1.');
-
+                questionNumber = questionNumber.replace(/^(\\d+)[.．、]\\s*\\d+[.．、]/, '$1.');
                 text += `${questionNumber} ${stripHTML(question.content)}\n`;
 
                 if (question.options.length > 0) {
@@ -610,7 +629,6 @@
         return text;
     }
 
-
     async function processImages(paperContent) {
         if (!paperContent.options.downloadImages) return paperContent;
 
@@ -619,7 +637,7 @@
         const imagePromises = [];
         const imageMap = new Map();
 
-
+        // 收集所有图片URL
         paperContent.sections.forEach(section => {
             section.questions.forEach(question => {
                 question.images.forEach(img => {
@@ -638,14 +656,15 @@
             });
         });
 
-
+        // 等待所有图片下载完成
         await Promise.all(imagePromises);
 
-
+        // 替换图片URL为base64
         paperContent.sections.forEach(section => {
             section.questions.forEach(question => {
-
                 const imgRegex = /<img[^>]+src="([^"]+)"[^>]*>/g;
+
+                // 替换题目内容中的图片
                 question.content = question.content.replace(imgRegex, (match, src) => {
                     const base64 = imageMap.get(src);
                     if (base64) {
@@ -654,7 +673,7 @@
                     return match;
                 });
 
-
+                // 替换选项中的图片
                 question.options = question.options.map(option => {
                     return option.replace(imgRegex, (match, src) => {
                         const base64 = imageMap.get(src);
@@ -665,7 +684,7 @@
                     });
                 });
 
-
+                // 替换答案中的图片
                 if (question.answer) {
                     question.answer = question.answer.replace(imgRegex, (match, src) => {
                         const base64 = imageMap.get(src);
@@ -676,7 +695,7 @@
                     });
                 }
 
-
+                // 替换解析中的图片
                 if (question.explanation) {
                     question.explanation = question.explanation.replace(imgRegex, (match, src) => {
                         const base64 = imageMap.get(src);
@@ -693,7 +712,6 @@
         return paperContent;
     }
 
-
     function fetchImageAsBase64(url) {
         return new Promise((resolve, reject) => {
             GM_xmlhttpRequest({
@@ -709,7 +727,7 @@
                             binary += String.fromCharCode(bytes[i]);
                         }
 
-
+                        // 自动检测图片类型
                         let mimeType = 'image/jpeg';
                         if (url.endsWith('.png')) {
                             mimeType = 'image/png';
@@ -717,6 +735,8 @@
                             mimeType = 'image/gif';
                         } else if (url.endsWith('.svg')) {
                             mimeType = 'image/svg+xml';
+                        } else if (url.endsWith('.webp')) {
+                            mimeType = 'image/webp';
                         }
 
                         const base64 = 'data:' + mimeType + ';base64,' + btoa(binary);
@@ -732,91 +752,93 @@
         });
     }
 
-
     async function exportPaper(format) {
-        let paperContent = extractPaperContent();
+        try {
+            let paperContent = extractPaperContent();
 
-        if (format === 'word' && paperContent.options.downloadImages) {
-            paperContent = await processImages(paperContent);
+            if (format === 'word' && paperContent.options.downloadImages) {
+                paperContent = await processImages(paperContent);
+            }
+
+            const fileName = `${paperContent.title}_${new Date().toISOString().slice(0, 10)}`;
+
+            showProgress(`正在导出为${format.toUpperCase()}格式...`);
+
+            switch (format) {
+                case 'word':
+                    const html = paperToHTML(paperContent);
+                    const blob = new Blob([html], {type: 'text/html'});
+                    const url = URL.createObjectURL(blob);
+
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = `${fileName}.doc`;
+                    document.body.appendChild(a);
+                    a.click();
+                    document.body.removeChild(a);
+
+                    setTimeout(() => URL.revokeObjectURL(url), 100);
+                    break;
+
+                case 'txt':
+                    const text = paperToText(paperContent);
+                    const txtBlob = new Blob([text], {type: 'text/plain; charset=utf-8'});
+                    const txtUrl = URL.createObjectURL(txtBlob);
+
+                    const txtLink = document.createElement('a');
+                    txtLink.href = txtUrl;
+                    txtLink.download = `${fileName}.txt`;
+                    document.body.appendChild(txtLink);
+                    txtLink.click();
+                    document.body.removeChild(txtLink);
+
+                    setTimeout(() => URL.revokeObjectURL(txtUrl), 100);
+                    break;
+
+                case 'json':
+                    const json = JSON.stringify(paperContent, null, 2);
+                    const jsonBlob = new Blob([json], {type: 'application/json; charset=utf-8'});
+                    const jsonUrl = URL.createObjectURL(jsonBlob);
+
+                    const jsonLink = document.createElement('a');
+                    jsonLink.href = jsonUrl;
+                    jsonLink.download = `${fileName}.json`;
+                    document.body.appendChild(jsonLink);
+                    jsonLink.click();
+                    document.body.removeChild(jsonLink);
+
+                    setTimeout(() => URL.revokeObjectURL(jsonUrl), 100);
+                    break;
+            }
+
+            hideProgress();
+            alert(`已成功导出为${format.toUpperCase()}格式！`);
+        } catch (error) {
+            hideProgress();
+            alert(`导出失败：${error.message}`);
+            console.error('导出错误：', error);
         }
-
-        const fileName = `${paperContent.title}_${new Date().toISOString().slice(0, 10)}`;
-
-        showProgress(`正在导出为${format.toUpperCase()}格式...`);
-
-        switch (format) {
-            case 'word':
-                const html = paperToHTML(paperContent);
-
-                const blob = new Blob([html], {type: 'text/html'});
-                const url = URL.createObjectURL(blob);
-
-
-                const a = document.createElement('a');
-                a.href = url;
-                a.download = `${fileName}.doc`;
-                document.body.appendChild(a);
-                a.click();
-                document.body.removeChild(a);
-
-
-                setTimeout(() => URL.revokeObjectURL(url), 100);
-                break;
-
-            case 'txt':
-                const text = paperToText(paperContent);
-                const txtBlob = new Blob([text], {type: 'text/plain'});
-                const txtUrl = URL.createObjectURL(txtBlob);
-
-                const txtLink = document.createElement('a');
-                txtLink.href = txtUrl;
-                txtLink.download = `${fileName}.txt`;
-                document.body.appendChild(txtLink);
-                txtLink.click();
-                document.body.removeChild(txtLink);
-
-                setTimeout(() => URL.revokeObjectURL(txtUrl), 100);
-                break;
-
-            case 'json':
-                const json = JSON.stringify(paperContent, null, 2);
-                const jsonBlob = new Blob([json], {type: 'application/json'});
-                const jsonUrl = URL.createObjectURL(jsonBlob);
-
-                const jsonLink = document.createElement('a');
-                jsonLink.href = jsonUrl;
-                jsonLink.download = `${fileName}.json`;
-                document.body.appendChild(jsonLink);
-                jsonLink.click();
-                document.body.removeChild(jsonLink);
-
-                setTimeout(() => URL.revokeObjectURL(jsonUrl), 100);
-                break;
-        }
-
-        hideProgress();
-        alert(`已成功导出为${format.toUpperCase()}格式！`);
     }
-
 
     function cleanHTML(html) {
         if (!html) return '';
-
-        return html.replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '');
+        // 移除script标签和危险内容
+        return html.replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '')
+                   .replace(/<style\b[^<]*(?:(?!<\/style>)<[^<]*)*<\/style>/gi, '')
+                   .replace(/on\w+="[^"]*"/gi, '')
+                   .replace(/javascript:/gi, '');
     }
-
 
     function stripHTML(html) {
         if (!html) return '';
         const temp = document.createElement('div');
-        temp.innerHTML = html;
+        temp.innerHTML = cleanHTML(html);
         return temp.textContent || temp.innerText || '';
     }
 
-
     function formatEquations(html) {
         if (!html) return '';
-
+        // 可以在这里添加更多公式格式化逻辑
         return html;
     }
 })();
